@@ -24,6 +24,15 @@ MOZART_TABLE = "shopify-dw.marketing.mozart_emails"
 SHOP_PROFILE_TABLE = "shopify-dw.accounts_and_administration.shop_profile_current"
 ENGLISH_MARKETS = "('US', 'GB', 'AU', 'CA', 'IE', 'NZ')"
 BASELINE_WINDOW_DAYS = 30
+
+# These filters must appear in every SEGMENT_QUERY in experiment.py.
+# Import them so the constraints are enforced in code, not just docs.
+#
+# MERCHANT_ONLY_FILTER: excludes Shop Buyer (consumer) emails. All ideation is
+# scoped to merchant (shop) recipients only. Never remove this filter.
+MERCHANT_ONLY_FILTER = "e.recipient_type = 'shop'"
+JOURNEY_TYPE_FILTER  = "e.campaign_type = 'Journey'"
+
 CACHE_DIR = Path.home() / ".cache" / "autoresearch-email"
 BASELINE_FILE = CACHE_DIR / "baseline.json"
 

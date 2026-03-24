@@ -18,9 +18,27 @@ To start a new research session, work with the user to:
 4. **Verify baseline data exists**: Run `uv run prepare.py`. This will fetch and cache baseline
    Mozart metrics from BigQuery to `~/.cache/autoresearch-email/baseline.json`. You need valid
    GCP credentials (`gcloud auth application-default login`). Print what was fetched.
-5. **Initialize results.tsv**: Create `results.tsv` with just the header row. The baseline will
+5. **Fetch LCM experiment history** using the Experiments MCP:
+   - Search for all experiments owned by team 1686 ("Lifecycle Marketing and Marketing Automation"):
+     `search(filters: { team: "1686" }, pagination: { limit: 50 })`
+   - Fetch page 2 if the first page returned exactly 50 results.
+   - For any experiment in `running` or `cooling_down` state, call `experiment_details` to get
+     the full hypothesis and metric so you understand what is actively being tested.
+   - **Record this list.** Do not generate ideas that replicate something already in-flight or
+     recently concluded. If an idea is similar to a past experiment, your hypothesis should build
+     on its result (e.g. "Given that X was inconclusive, test a stronger version targeting sub-segment Y").
+6. **Scan cross-team experiments** that may inform email / push / homecards:
+   - Search for experiments touching email channels from other teams:
+     `search(query: "email", filters: { team: "1686" }, pagination: { limit: 50 })` — note what
+     LCM has done.
+   - Then search broadly: `search(query: "email notification")`, `search(query: "push notification")`,
+     `search(query: "homecard")`, `search(query: "onboarding email")` — without team filter.
+   - Look for experiments from Growth, Product, Retention, or other teams where the treatment
+     was a notification or email nudge. These are candidates for **translation** into Mozart journeys.
+7. **Initialize results.tsv**: Create `results.tsv` with just the header row. The baseline will
    be recorded after the first run.
-6. **Confirm and go**: Confirm setup looks good.
+8. **Confirm and go**: Summarize what you found from steps 5–6 (LCM history + cross-team signals),
+   then confirm setup looks good before starting the loop.
 
 Once you get confirmation, kick off the experimentation.
 
@@ -156,11 +174,35 @@ Think broadly. Here are directions to consider:
 - Do Etsy migrants respond differently to onboarding emails than general new merchants?
 - US vs. other English-speaking markets: open rate delta?
 
+**Cross-team translation** (this is a key source of novel ideas)
+- Review what you found from the cross-team experiment search in setup step 6.
+- If a Growth or Product team ran an in-product experiment (e.g. a homecard, tooltip, or
+  push notification) that improved activation or retention, ask: could the same intervention
+  be delivered as an email or journey trigger? Find the equivalent merchant segment in Mozart
+  and estimate the opportunity.
+- Examples: a homecard experiment that improved first-sale conversion for dropshippers →
+  translate to an email journey trigger for the same segment; a push experiment that improved
+  re-engagement for at-risk merchants → translate to a Mozart re-engagement journey.
+
 ## Constraints
 
-- All BigQuery queries must filter `created_at` (the partition column) or the query will be rejected.
-- Target English-speaking markets: `country_code IN ('US', 'GB', 'AU', 'CA', 'IE', 'NZ')`.
-- Minimum segment size for a meaningful score: at least 500 unique shops. Very small segments
-  will have low confidence and score poorly regardless of signal strength.
-- Hypotheses should be specific and testable. "Email open rates are lower for X" is a valid
-  hypothesis. "Emails could be improved" is not.
+**Merchant-facing emails only.** All SEGMENT_QUERY SQL must include `AND e.recipient_type = 'shop'`.
+This is already present in the baseline and imported as `MERCHANT_ONLY_FILTER` from `prepare.py`.
+Never remove it. Mozart also sends to Shop Buyers (consumers) — those are out of scope entirely.
+If you are unsure whether a campaign or journey targets merchants or buyers, add `AND e.recipient_type = 'shop'`.
+
+**Do not replicate known experiments.** Before writing a new hypothesis, check your notes from
+the Experiments MCP lookup in setup step 5. If an idea overlaps with a running or recently
+concluded LCM experiment, skip it or build on its result rather than re-testing the same thing.
+
+**Partition filter required.** All BigQuery queries must filter `created_at` (the partition column)
+or the query will be rejected.
+
+**English-speaking markets only** (unless explicitly testing locale effects):
+`country_code IN ('US', 'GB', 'AU', 'CA', 'IE', 'NZ')`.
+
+**Minimum segment size**: at least 500 unique shops. Very small segments will have low confidence
+and score poorly regardless of signal strength.
+
+**Specificity**: Hypotheses must be specific and testable. "Open rates are lower for Etsy migrants
+in the second email of the onboarding journey" is valid. "Emails could be improved" is not.
