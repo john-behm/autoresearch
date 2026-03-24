@@ -1,114 +1,166 @@
-# autoresearch
+# autoresearch — Email Edition
 
-This is an experiment to have the LLM do its own research.
+This is an autonomous experiment idea generator for Shopify's merchant lifecycle email program.
+The agent iterates on `experiment.py`, running BigQuery queries against Mozart data to surface
+high-opportunity experiment ideas.
 
 ## Setup
 
-To set up a new experiment, work with the user to:
+To start a new research session, work with the user to:
 
-1. **Agree on a run tag**: propose a tag based on today's date (e.g. `mar5`). The branch `autoresearch/<tag>` must not already exist — this is a fresh run.
+1. **Agree on a run tag**: propose a tag based on today's date (e.g. `mar26`). The branch
+   `autoresearch/<tag>` must not already exist — this is a fresh run.
 2. **Create the branch**: `git checkout -b autoresearch/<tag>` from current master.
-3. **Read the in-scope files**: The repo is small. Read these files for full context:
+3. **Read the in-scope files** for full context:
    - `README.md` — repository context.
-   - `prepare.py` — fixed constants, data prep, tokenizer, dataloader, evaluation. Do not modify.
-   - `train.py` — the file you modify. Model architecture, optimizer, training loop.
-4. **Verify data exists**: Check that `~/.cache/autoresearch/` contains data shards and a tokenizer. If not, tell the human to run `uv run prepare.py`.
-5. **Initialize results.tsv**: Create `results.tsv` with just the header row. The baseline will be recorded after the first run.
+   - `prepare.py` — fixed constants, BigQuery utilities, baseline fetching, opportunity scoring. **Do not modify.**
+   - `experiment.py` — the file you modify each iteration. Defines the experiment hypothesis and BigQuery queries.
+4. **Verify baseline data exists**: Run `uv run prepare.py`. This will fetch and cache baseline
+   Mozart metrics from BigQuery to `~/.cache/autoresearch-email/baseline.json`. You need valid
+   GCP credentials (`gcloud auth application-default login`). Print what was fetched.
+5. **Initialize results.tsv**: Create `results.tsv` with just the header row. The baseline will
+   be recorded after the first run.
 6. **Confirm and go**: Confirm setup looks good.
 
 Once you get confirmation, kick off the experimentation.
 
 ## Experimentation
 
-Each experiment runs on a single GPU. The training script runs for a **fixed time budget of 5 minutes** (wall clock training time, excluding startup/compilation). You launch it simply as: `uv run train.py`.
+Each experiment evaluates a specific email hypothesis against live Mozart data in BigQuery.
+The script queries the data, computes an **opportunity score**, and prints results.
 
 **What you CAN do:**
-- Modify `train.py` — this is the only file you edit. Everything is fair game: model architecture, optimizer, hyperparameters, training loop, batch size, model size, etc.
+- Modify `experiment.py` — this is the only file you edit. Change the hypothesis, the
+  audience segment, the BigQuery queries, which metric you're optimizing for. Everything is fair game.
 
 **What you CANNOT do:**
-- Modify `prepare.py`. It is read-only. It contains the fixed evaluation, data loading, tokenizer, and training constants (time budget, sequence length, etc).
-- Install new packages or add dependencies. You can only use what's already in `pyproject.toml`.
-- Modify the evaluation harness. The `evaluate_bpb` function in `prepare.py` is the ground truth metric.
+- Modify `prepare.py`. It is read-only. It contains the fixed scoring logic, BigQuery utilities,
+  baseline data, and constants.
+- Modify `results.tsv` directly — it is written by the experiment loop.
 
-**The goal is simple: get the lowest val_bpb.** Since the time budget is fixed, you don't need to worry about training time — it's always 5 minutes. Everything is fair game: change the architecture, the optimizer, the hyperparameters, the batch size, the model size. The only constraint is that the code runs without crashing and finishes within the time budget.
+**The goal is simple: find the highest opportunity_score.** Higher = better. A score of 10 means:
+large addressable segment + meaningful performance gap vs. baseline + statistically solid evidence.
 
-**VRAM** is a soft constraint. Some increase is acceptable for meaningful val_bpb gains, but it should not blow up dramatically.
+**Simplicity criterion**: Prefer focused, specific hypotheses over vague ones. A precise, testable
+experiment idea with a 6.0 score beats a hand-wavy idea that scores 5.9. The best output is a crisp,
+implementable experiment that Mozart engineers could actually build.
 
-**Simplicity criterion**: All else being equal, simpler is better. A small improvement that adds ugly complexity is not worth it. Conversely, removing something and getting equal or better results is a great outcome — that's a simplification win. When evaluating whether to keep a change, weigh the complexity cost against the improvement magnitude. A 0.001 val_bpb improvement that adds 20 lines of hacky code? Probably not worth it. A 0.001 val_bpb improvement from deleting code? Definitely keep. An improvement of ~0 but much simpler code? Keep.
+**The first run**: Your very first run should always use the baseline `experiment.py` as-is to
+establish the baseline metrics and confirm BigQuery is working.
 
-**The first run**: Your very first run should always be to establish the baseline, so you will run the training script as is.
+## The metric
+
+`opportunity_score` is a 0–10 composite score computed by `prepare.py`:
+
+- **Reach** (30% weight): log-scaled count of unique shops in the segment. More shops = higher reach.
+- **Signal** (50% weight): absolute performance gap vs. baseline, in the direction that matters.
+  For open/click rate: segment > baseline = positive. For unsub rate: segment < baseline = positive.
+- **Confidence** (multiplier): based on send volume. Small samples discount the score.
+
+The first run establishes the baseline (which scores 0.0 by definition — there's no gap to measure
+against itself). Every subsequent run should try to beat the best score so far.
 
 ## Output format
 
-Once the script finishes it prints a summary like this:
+When `experiment.py` runs, it prints:
 
 ```
 ---
-val_bpb:          0.997900
-training_seconds: 300.1
-total_seconds:    325.9
-peak_vram_mb:     45060.2
-mfu_percent:      39.80
-total_tokens_M:   499.6
-num_steps:        953
-num_params_M:     50.3
-depth:            8
+opportunity_score:   7.3
+unique_shops:        45231
+total_sends:         187432
+open_rate_pct:       31.2    (baseline: 24.8)
+lift_pct:            +6.4
+confidence:          0.92
+title:               Send timing — immediate vs 24h delay for Etsy migrants
 ```
 
-Note that the script is configured to always stop after 5 minutes, so depending on the computing platform of this computer the numbers might look different. You can extract the key metric from the log file:
+Extract the key metric:
 
-```
-grep "^val_bpb:" run.log
+```bash
+grep "^opportunity_score:" run.log
 ```
 
 ## Logging results
 
-When an experiment is done, log it to `results.tsv` (tab-separated, NOT comma-separated — commas break in descriptions).
+When an experiment is done, log it to `results.tsv` (tab-separated — commas break descriptions).
 
 The TSV has a header row and 5 columns:
 
 ```
-commit	val_bpb	memory_gb	status	description
+commit	opportunity_score	unique_shops	status	description
 ```
 
 1. git commit hash (short, 7 chars)
-2. val_bpb achieved (e.g. 1.234567) — use 0.000000 for crashes
-3. peak memory in GB, round to .1f (e.g. 12.3 — divide peak_vram_mb by 1024) — use 0.0 for crashes
+2. opportunity_score achieved (e.g. 7.300) — use 0.000 for crashes
+3. unique_shops in the segment (e.g. 45231) — use 0 for crashes
 4. status: `keep`, `discard`, or `crash`
-5. short text description of what this experiment tried
+5. short description of the hypothesis tested
 
 Example:
 
 ```
-commit	val_bpb	memory_gb	status	description
-a1b2c3d	0.997900	44.0	keep	baseline
-b2c3d4e	0.993200	44.2	keep	increase LR to 0.04
-c3d4e5f	1.005000	44.0	discard	switch to GeLU activation
-d4e5f6g	0.000000	0.0	crash	double model width (OOM)
+commit	opportunity_score	unique_shops	status	description
+a1b2c3d	0.000	1823491	keep	baseline — all journey emails
+b2c3d4e	7.300	45231	keep	Etsy migrants: open rate gap in first email within 1h vs 24h
+c3d4e5f	2.100	8432	discard	Dropshippers: click rate vs non-dropshippers (small segment lift)
+d4e5f6g	0.000	0	crash	syntax error in SQL join
 ```
 
 ## The experiment loop
 
-The experiment runs on a dedicated branch (e.g. `autoresearch/mar5` or `autoresearch/mar5-gpu0`).
+Run on a dedicated branch (e.g. `autoresearch/mar26`).
 
 LOOP FOREVER:
 
-1. Look at the git state: the current branch/commit we're on
-2. Tune `train.py` with an experimental idea by directly hacking the code.
-3. git commit
-4. Run the experiment: `uv run train.py > run.log 2>&1` (redirect everything — do NOT use tee or let output flood your context)
-5. Read out the results: `grep "^val_bpb:\|^peak_vram_mb:" run.log`
-6. If the grep output is empty, the run crashed. Run `tail -n 50 run.log` to read the Python stack trace and attempt a fix. If you can't get things to work after more than a few attempts, give up.
-7. Record the results in the tsv (NOTE: do not commit the results.tsv file, leave it untracked by git)
-8. If val_bpb improved (lower), you "advance" the branch, keeping the git commit
-9. If val_bpb is equal or worse, you git reset back to where you started
+1. Look at the git state: current branch/commit we're on.
+2. Read `results.tsv` to understand what has been tried and what the best score is so far.
+3. Tune `experiment.py` with a new hypothesis — change the segment, the metric, the SQL queries.
+4. `git commit`
+5. Run: `uv run experiment.py > run.log 2>&1`
+6. Read results: `grep "^opportunity_score:\|^unique_shops:" run.log`
+7. If grep output is empty, the run crashed. Run `tail -n 50 run.log` to read the error. Fix and retry if it's a simple bug (syntax, missing column). If fundamentally broken, log as crash and move on.
+8. Record in `results.tsv`.
+9. If `opportunity_score` **improved** (higher), you advance the branch (keep the commit).
+10. If equal or worse, `git reset` back to where you started.
 
-The idea is that you are a completely autonomous researcher trying things out. If they work, keep. If they don't, discard. And you're advancing the branch so that you can iterate. If you feel like you're getting stuck in some way, you can rewind but you should probably do this very very sparingly (if ever).
+**NEVER STOP**: Once the experiment loop has begun, do NOT pause to ask the human if you should
+continue. You are autonomous. If you run out of ideas, dig deeper — look at different journey
+types, time windows, merchant cohorts, locale splits, signup sources, plan types, unsubscribe
+patterns. The loop runs until the human interrupts you, period.
 
-**Timeout**: Each experiment should take ~5 minutes total (+ a few seconds for startup and eval overhead). If a run exceeds 10 minutes, kill it and treat it as a failure (discard and revert).
+## Experiment space — what to explore
 
-**Crashes**: If a run crashes (OOM, or a bug, or etc.), use your judgment: If it's something dumb and easy to fix (e.g. a typo, a missing import), fix it and re-run. If the idea itself is fundamentally broken, just skip it, log "crash" as the status in the tsv, and move on.
+Think broadly. Here are directions to consider:
 
-**NEVER STOP**: Once the experiment loop has begun (after the initial setup), do NOT pause to ask the human if you should continue. Do NOT ask "should I keep going?" or "is this a good stopping point?". The human might be asleep, or gone from a computer and expects you to continue working *indefinitely* until you are manually stopped. You are autonomous. If you run out of ideas, think harder — read papers referenced in the code, re-read the in-scope files for new angles, try combining previous near-misses, try more radical architectural changes. The loop runs until the human interrupts you, period.
+**Audience segmentation**
+- Onboarding type: Etsy migrants, Dropshippers, POS/Retail, Cross-border, Replatformers, Digital Products
+- Merchant lifecycle: 0–30 days, 31–90 days, at-risk (no sales in 30 days), churned
+- Plan tier, country (US vs. CA vs. GB vs. AU), locale, signup source
 
-As an example use case, a user might leave you running while they sleep. If each experiment takes you ~5 minutes then you can run approx 12/hour, for a total of about 100 over the duration of the average human sleep. The user then wakes up to experimental results, all completed by you while they slept!
+**Journey-level patterns**
+- Which journey emails have the worst open rates relative to segment baseline?
+- Which journeys have high open but low click (content-engagement gap)?
+- Which journeys have elevated unsubscribe rates?
+
+**Timing signals**
+- Time from trigger event to email send: immediate vs. delayed
+- Day of week / time of day effects
+- Time between emails in a sequence (cadence fatigue)
+
+**Sequence position effects**
+- Email #1 vs. #3 vs. #6 in a journey — where does engagement drop off?
+- Are early-journey and late-journey emails equally effective?
+
+**Cross-segment comparisons**
+- Do Etsy migrants respond differently to onboarding emails than general new merchants?
+- US vs. other English-speaking markets: open rate delta?
+
+## Constraints
+
+- All BigQuery queries must filter `created_at` (the partition column) or the query will be rejected.
+- Target English-speaking markets: `country_code IN ('US', 'GB', 'AU', 'CA', 'IE', 'NZ')`.
+- Minimum segment size for a meaningful score: at least 500 unique shops. Very small segments
+  will have low confidence and score poorly regardless of signal strength.
+- Hypotheses should be specific and testable. "Email open rates are lower for X" is a valid
+  hypothesis. "Emails could be improved" is not.
