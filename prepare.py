@@ -69,12 +69,25 @@ def get_bq_client():
     except ImportError:
         print("ERROR: google-cloud-bigquery not installed. Run: uv sync", file=sys.stderr)
         sys.exit(1)
+
+    # Shopify's data lives in shopify-dw, but BQ jobs must be billed to a project
+    # where you have bigquery.jobs.create permission. Set BQ_PROJECT to override.
+    # If unset, we set shopify-dw as the quota project, which works for most
+    # Shopify employees with standard data warehouse access.
+    project = os.environ.get("BQ_PROJECT", "shopify-dw")
+
     try:
-        client = bigquery.Client()
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            client = bigquery.Client(project=project)
         return client
     except Exception as e:
         print(f"ERROR: Could not create BigQuery client: {e}", file=sys.stderr)
-        print("Try: gcloud auth application-default login", file=sys.stderr)
+        print("\nTo fix, try one of:", file=sys.stderr)
+        print("  gcloud auth application-default login", file=sys.stderr)
+        print("  gcloud auth application-default set-quota-project shopify-dw", file=sys.stderr)
+        print("  BQ_PROJECT=<your-project> uv run prepare.py", file=sys.stderr)
         sys.exit(1)
 
 
